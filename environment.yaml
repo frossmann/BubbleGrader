@@ -1,0 +1,16 @@
+name: bubbles
+channels: 
+  - conda-forge
+  - defaults
+dependencies: 
+  - python=3.9
+  - jupyter=1.*
+  - jupytext
+  - numpy
+  - matplotlib
+  - opencv
+  - imutils
+  - scipy
+  - ipython
+  - black
+  - pre-commit
