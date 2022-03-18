@@ -9,6 +9,8 @@ dependencies:
   - numpy
   - matplotlib
   - opencv
+  - poppler
+  - pdf2image
   - imutils
   - scipy
   - ipython
