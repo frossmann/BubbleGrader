@@ -4,9 +4,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats as stats
 from pdf2image import convert_from_path
-from StringUtils import tprint, get_alpha
+from StringUtils import tprint, get_alpha, timestamp
 import string
 import yaml
+import os
 
 
 def pdf_to_jpeg(pdf_path, dpi=300):
@@ -21,7 +22,6 @@ def pdf_to_jpeg(pdf_path, dpi=300):
 class BubbleDispatcher:
     def load_jpeg(self):
         # Read the converted jpeg:
-        print(f"{self.filename=}")
         im = cv.imread(self.jpeg_path)
         gray = cv.cvtColor(im, cv.COLOR_BGR2GRAY)
 
@@ -33,8 +33,16 @@ class BubbleDispatcher:
 
         return im, thresh
 
-    def find_bboxes(self):
+    def find_n_bboxes(self):
         # apply morphological close with square kernel
+        bboxes = self.find_bboxes()
+        bbox_area = bboxes[:, 2] * bboxes[:, 3]
+        #    n_boxes = input(f"Input number of bounding boxes to search for:")
+        idx = np.argsort(bbox_area)[::-1][: int(self.n_boxes)]
+        # candidate_bboxes = bboxes[idx, :]
+        self.bboxes = bboxes[idx, :]
+
+    def find_bboxes(self):
         kernel_size = 50
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
         morph = cv.morphologyEx(self.thresh, cv.MORPH_CLOSE, kernel)
@@ -44,12 +52,7 @@ class BubbleDispatcher:
         contours = contours[0] if len(contours) == 2 else contours[1]
 
         bboxes = np.array([cv.boundingRect(contour) for contour in contours])
-        bbox_area = bboxes[:, 2] * bboxes[:, 3]
-        #    n_boxes = input(f"Input number of bounding boxes to search for:")
-
-        idx = np.argsort(bbox_area)[::-1][: int(self.n_boxes)]
-        candidate_bboxes = bboxes[idx, :]
-        return candidate_bboxes
+        return bboxes
 
     def set_template(self):
         cv.imshow("Template", self.im)
@@ -62,10 +65,10 @@ class BubbleDispatcher:
             )
         self.n_boxes = n_boxes
 
-        candidate_bboxes = self.find_bboxes()
+        self.find_n_bboxes()
 
         im_copy = self.im.copy()
-        for bb in candidate_bboxes:
+        for bb in self.bboxes:
             pad = 10
             x, y, w, h = bb
             cv.rectangle(
@@ -77,7 +80,7 @@ class BubbleDispatcher:
 
         to_keep = []
         n_kept = 0
-        for iter, bb in enumerate(candidate_bboxes):
+        for iter, bb in enumerate(self.bboxes):
             pad = 10
             x, y, w, h = bb
             im_copy = self.im.copy()
@@ -98,8 +101,8 @@ class BubbleDispatcher:
 
             if res == "y":
                 direction = input("Row-major or column-major? [Enter r/c]")
-                n_cols = input("How many columns?    [Enter integer")
-                n_rows = input("How many rows? [Enter integer] ")
+                n_cols = int(input("How many columns?    [Enter integer"))
+                n_rows = int(input("How many rows? [Enter integer] "))
                 format = input("Alphanumeric or numeric?    [Enter a/n]")
                 bbox_params[n_kept] = dict(
                     zip(param_keys, [direction, n_cols, n_rows, format])
@@ -109,50 +112,62 @@ class BubbleDispatcher:
             else:
                 pass
         self.bbox_params = bbox_params
-        self.bboxes = candidate_bboxes[to_keep, :]
+        self.bboxes = self.bboxes[to_keep, :]
         self.n_boxes_kept = n_kept
 
-    def __init__(self, im_filename):
-        print("Initializing BubbleDispatcher...")
-        # im_filename = input("Input filepath to template bubble sheet:  ")
+    def find_bbox_from_target(self, targets):
+        if len(targets) == 1:
+            targets = [targets]
 
-        self.filename = im_filename
-        jpeg_path = pdf_to_jpeg(im_filename)
+        output_bboxes = []
+        for target in targets:
+            bboxes = self.find_bboxes()
+            rmse = [np.sqrt(np.mean(bbox - target) ** 2) for bbox in bboxes]
+            closest_bbox = np.argmin(rmse)
+            output_bboxes.append(bboxes[closest_bbox])
+        self.bboxes = np.array(output_bboxes)
+
+    def __init__(self, jpeg_path):
+        # im_filename = input("Input filepath to template bubble sheet:  ")
         self.jpeg_path = jpeg_path
         self.im, self.thresh = self.load_jpeg()
-
-
-class BubbleGrader:
-    pass
+        self.n_boxes = None
 
 
 # filename = "/Users/francis/Dropbox/bad_bubbles.pdf"
 # /Users/francis/Dropbox/eg_scan.pdf
 if __name__ == "__main__":
-    template = BubbleDispatcher(im_filename="/Users/francis/Dropbox/eg_scan.pdf")
-    template.set_template()
-
-    new = BubbleDispatcher(
-        "/Users/francis/Desktop/eosc110v01/data/20220318131548963.pdf"
+    fullfile = (
+        "/Users/francis/Desktop/eosc110v01/eosc110v01_midterm1_individual_with_key.pdf"
     )
-    # for student in students...
-    """Load each student's PDF scan and find the bounding
-    boxes given template: 
-    - n_boxes_kept
-    - bboxes
+    folder, file = os.path.split(os.path.abspath(fullfile))
+    # pages = convert_from_path(fullfile, dpi=300)
 
-    
-    For each student scan find n_boxes_kept boundary boxes
-    using template.bboxes as a target to make the decision about
-    what bboxes to keep / discard."""
-    for target_bbox in template.bboxes:
-        """Then crop each binary image inside of the target_bbox
-        and grade with:
-        - solutions
-        - alpha
-        - num_questions
-        - num_options"""
-        pass
+    today = timestamp()
+    jpeg_folder = folder + "/" + today + "_pdf2jpg/"
+    # os.makedirs(jpeg_folder, exist_ok=True)
+
+    print("Reading PDF and converting to JPEG...")
+    print(f"Converted pages will be saved to {jpeg_folder}")
+    for page_num, page in enumerate(pages[:2]):
+        jpeg_path = jpeg_folder + file[:-4] + "_page" + str(page_num + 1) + ".jpg"
+        page.save(jpeg_path, "JPEG")
+
+        if page_num == 0:
+            template = BubbleDispatcher(jpeg_path)
+            template.set_template()
+
+        else:
+            bubblesheet = BubbleDispatcher(jpeg_path)
+            bubblesheet.find_bbox_from_target(template.bboxes)
+            """For each student scan find n_boxes_kept boundary boxes
+            using template.bboxes as a target to make the decision about
+            what bboxes to keep / discard."""
+
+            for target_bbox in template.bboxes:
+                pass
+                # Select the correct bounding box in the bubblesheet
+                # based of of the target bounding box from the template (key).
 
 
 #%%
@@ -160,30 +175,7 @@ print("")
 #%%
 
 
-def grade_bbox(alpha, solutions, im, thresh, bb, num_options, num_questions):
-    result = im.copy()
-    pad = 10
-    x, y, w, h = bb
-    cv.rectangle(result, (x - pad, y - pad), (x + w + pad, y + h + pad), (0, 0, 255), 4)
-    im_crop = im.copy()[y - pad : y + h + pad, x - pad : x + pad + w]
-    thresh_crop = thresh.copy()[y - pad : y + h + pad, x - pad : x + pad + w]
-
-    # # show the cropped image:
-    # fig, ax = plt.subplots(2,1, figsize=(10,10))
-    # ax[0].imshow(im_crop)
-    # ax[1].imshow(thresh_crop)
-    image_copy = im_crop.copy()
-
-    contours = cv.findContours(
-        image=thresh_crop, mode=cv.RETR_EXTERNAL, method=cv.CHAIN_APPROX_NONE
-    )
-    contours = contours[0] if len(contours) == 2 else contours[1]
-
-    # # visualize the results
-    # cv.imshow("contours :: CHAIN_APPROX_NONE", image_copy)
-    # cv.waitKey(0)
-    # # cv.imwrite("contours.jpg", image_copy)
-    # cv.destroyAllWindows()
+def find_bubble_contours(contours):
     bubble_contours = []
     areas = []
     for contour in contours:
@@ -206,41 +198,102 @@ def grade_bbox(alpha, solutions, im, thresh, bb, num_options, num_questions):
             # tprint(f'(w x h)= {w*h}')
             # tprint(f'{area=}')
             bubble_contours.append(contour)
+    return bubble_contours
 
-    # sort the contours from top to bottom:
-    sorted_contours = sorted(
-        bubble_contours, key=lambda contour: cv.boundingRect(contour)[1], reverse=False
+
+def read_bubbles_in_bbox(im, thresh, bb, n_rows, n_cols, direction, format):
+
+    num_bubbles = n_rows * n_cols
+    print(f"{num_bubbles=}")
+    num_questions = n_rows if direction == "r" else n_cols
+    print(f"{num_questions=}")
+    num_options = n_cols if direction == "r" else n_rows
+    print(f"{num_options=}")
+
+    if format == "a":
+        alpha = get_alpha(num_options)
+    else:
+        alpha = np.arange(num_options)
+    print(f"{alpha=}")
+
+    # Copy the image for plotting later:
+    im_copy = im.copy()
+    # Draw the bounding box rectange (plus some padding)
+    # and crop both the image and the thresholded image.
+    pad = 10
+    x, y, w, h = bb
+    cv.rectangle(
+        im_copy, (x - pad, y - pad), (x + w + pad, y + h + pad), (0, 0, 255), 4
     )
+    im_crop = im_copy[y - pad : y + h + pad, x - pad : x + pad + w]
+    thresh_crop = thresh.copy()[y - pad : y + h + pad, x - pad : x + pad + w]
 
-    ###
-    num_bubbles = num_questions * num_options
+    # # show the cropped image:
+    # fig, ax = plt.subplots(2,1, figsize=(10,10))
+    # ax[0].imshow(im_crop)
+    # ax[1].imshow(thresh_crop)
 
-    if not len(sorted_contours) == num_bubbles:
+    # Find the external contours in the cropped and thresholded
+    # image:
+    contours = cv.findContours(
+        image=thresh_crop, mode=cv.RETR_EXTERNAL, method=cv.CHAIN_APPROX_NONE
+    )
+    contours = contours[0] if len(contours) == 2 else contours[1]
+
+    bubble_contours = find_bubble_contours(contours)
+    print(f"{bubble_contours=}")
+    if not len(bubble_contours) == num_bubbles:
         Warning(
-            f"Failed autograde. {len(sorted_contours)} bubbles found, expected{num_bubbles=}. "
+            f"Failed autograde. {len(bubble_contours)} bubbles found, expected{num_bubbles=}. "
         )
         return False
 
-    # sort the question contours top-to-bottom
-    responses = np.zeros(num_questions)
-    # I'm using num_bubbles as the stopping point so I don't get dict lookup errors
-    # if I find too many contours
-    for (q, i) in enumerate(np.arange(0, num_bubbles, 5)):
-        if q > num_questions:
-            continue
-        # sort the contours for the current question from
-        # left to right, then initialize the index of the bubbled answer
-        # default sort for sort_contours function is 'left-to-right'. [0] returns the contours
-        sorted_question = sorted(
-            sorted_contours[i : i + 5], key=lambda contour: cv.boundingRect(contour)[0]
+    # If row-major:
+    if direction == "r":
+        # Sort the bubble contours from top to bottom of the page:
+        sorted_contours = sorted(
+            bubble_contours,
+            key=lambda contour: cv.boundingRect(contour)[1],
+            reverse=False,
         )
-        sorted_question = sorted_question
-        # cnts = contours.sort_contours(sorted_contours[i : i + 5])[0]
+    # Else if column-major:
+    elif direction == "c":
+        # Sort the bubble contours from left to right of the page:
+        sorted_contours = sorted(
+            bubble_contours,
+            key=lambda contour: cv.boundingRect(contour)[0],
+            reverse=False,
+        )
 
+    print(f"{sorted_contours=}")
+    # Initiate an empty array to record answers:
+    responses = []
+    # Loop through the sorted bubble contours from range(num_question)
+    # in steps of num_options:
+    for q, i in enumerate(np.arange(0, num_bubbles, num_options)):
+        print(f"{q=}")
+        print(f"{i=}")
+        if direction == "r":
+            # sort the contours for the current question from left to right
+            sorted_question = sorted(
+                sorted_contours[i : i + num_options],
+                key=lambda contour: cv.boundingRect(contour)[0],
+            )
+        if direction == "c":
+            # sort the contours for the current question from top to bottom
+            sorted_question = sorted(
+                sorted_contours[i : i + num_options],
+                key=lambda contour: cv.boundingRect(contour)[1],
+            )
+
+        # Initialize empty arrays to hold # pixels filled per
+        # bubble and number of pixels total per bubble:
         pixel_counts = np.zeros(num_options)
         bubble_sizes = np.zeros(num_options)
-        # loop over the sorted contours
+        # For each question, loop through bubbles:
         for iter, question_contour in enumerate(sorted_question):
+            print(f"{iter=}")
+            print(f"{question_contour=}")
             # construct a mask that reveals only the current "bubble" for the question
             # Return a new array, mask, of given shape and type, filled with zeros
             mask = np.zeros(thresh_crop.shape, dtype="uint8")
@@ -254,82 +307,85 @@ def grade_bbox(alpha, solutions, im, thresh, bb, num_options, num_questions):
             # count the number of non-zero pixels in the bubble area
             masked = cv.bitwise_and(thresh_crop, thresh_crop, mask=mask)
 
-            # cv.imshow('sequentially masked bubble',masked)
-            # cv.waitKey(0)
-
             # countNonZero returns the number of non-zero pixels in the bubble area
             total = cv.countNonZero(masked)
 
             bubble_sizes[iter] = np.size(np.where(mask == 255)[0])  # area of bubble
             pixel_counts[iter] = total  # number of 'filled in' pixels
-        # Uncomment to look at masks
 
+        # Calculate relative proportion of bubble filled in:
         bubble_fill = pixel_counts / bubble_sizes
+        # Find the most filled in bubble:
         max_filled = np.argmax(bubble_fill)
-        answer = None
 
+        # Test to see if no bubble was selected:
         if (
             np.allclose(np.max(bubble_fill), np.min(bubble_fill), rtol=0.5)
             and np.max(bubble_fill) < 0.8
         ):
             tprint("No answer selected")
-
+            answer = np.nan
+        # Otherwise, choose the most-filled in option.
+        # FIXME: add capability to read > 1 filled in option, flag, and allow manual marking.
         else:
-            tprint(f"Answer given: {alpha[max_filled]}")
-            answer = max_filled
+            print(alpha)
+            print(max_filled)
+            answer = alpha[max_filled]
 
-            if alpha[max_filled] == solutions[q]:
-                tprint("Correct!")
-                color = [0, 255, 0]
+        responses.append(answer)
+    return responses
 
-            else:
-                tprint("Incorrect.")
-                color = [0, 0, 255]
-        # Unfilled bubble ~ 33% filled.
-        # Filled bubble ~ 95% filled
+    # Unfilled bubble ~ 33% filled.
+    # Filled bubble ~ 95% filled
 
-        # if answer:
-        #     image_copy = im_crop.copy()
-        #     # draw contours
-        #     cv.drawContours(
-        #         image=image_copy,
-        #         contours=sorted_question[answer],
-        #         contourIdx=-1,
-        #         color=color,
-        #         thickness=2,
-        #         lineType=cv.LINE_AA,
-        #     )
-        #     cv.imshow("Testing", image_copy)
-        #     cv.waitKey(0)
+    # if answer:
+    #     image_copy = im_crop.copy()
+    #     # draw contours
+    #     cv.drawContours(
+    #         image=image_copy,
+    #         contours=sorted_question[answer],
+    #         contourIdx=-1,
+    #         color=color,
+    #         thickness=2,
+    #         lineType=cv.LINE_AA,
+    #     )
+    #     cv.imshow("Testing", image_copy)
+    #     cv.waitKey(0)
 
 
-# Load in the PDF and convert to JPEG format so that
-# OpenCV can read in the file:
-filename = "/Users/francis/Dropbox/eg_scan.pdf"
+# # Load in the PDF and convert to JPEG format so that
+# # OpenCV can read in the file:
+# filename = "/Users/francis/Dropbox/eg_scan.pdf"
 
-alpha = dict(zip(np.arange(0, 6), ["a", "b", "c", "d", "e"]))
+# alpha = dict(zip(np.arange(0, 6), ["a", "b", "c", "d", "e"]))
 
-solutions = [
-    "b",
-    "c",
-    "c",
-    "e",
-    "c",
-    "d",
-    "a",
-    "b",
-    "d",
-    "c",
-    "e",
-    "e",
-    "b",
-    "c",
-    "e",
-    "e",
-    "c",
-    "b",
-]
+# solutions = [
+#     "b",
+#     "c",
+#     "c",
+#     "e",
+#     "c",
+#     "d",
+#     "a",
+#     "b",
+#     "d",
+#     "c",
+#     "e",
+#     "e",
+#     "b",
+#     "c",
+#     "e",
+#     "e",
+#     "c",
+#     "b",
+# ]
 
+
+responses = read_bubbles_in_bbox(
+    bubblesheet.im, bubblesheet.thresh, bubblesheet.bboxes[0], **template.bbox_params[0]
+)
+
+#%%
 # a bad scan to try and break the code:
 filename = "/Users/francis/Dropbox/bad_bubbles.pdf"
 
