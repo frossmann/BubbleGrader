@@ -1,5 +1,6 @@
 #%%
 import copy
+import pickle
 from datetime import datetime
 from pathlib import Path
 
@@ -10,7 +11,14 @@ import numpy as np
 import pandas as pd
 from pdf2image import convert_from_path
 from tqdm import tqdm
-from events import bin_and_count_image, parse_filled_bubbles, select_regions
+
+from events import (
+    bin_and_count_image,
+    estimate_filled_threshold,
+    parse_filled_bubbles_with_corrections,
+    print_sep,
+    select_regions,
+)
 
 
 class FeatureExtraction:
@@ -118,44 +126,136 @@ def register_images(pages):
     return registered_images
 
 
-@click.command()
-@click.argument("pdf_path", type=str)
-def main(pdf_path):
+def plot_annotated_document(
+    bboxes,
+    annotated_image_filename,
+    image,
+    xl,
+    yl,
+    annotation_data,
+    image_destination=None,
+):
+    fig, ax = plt.subplots(figsize=(8.5, 11))
+    ax.imshow(image, origin="upper", cmap="gray_r")
+    ax.set_xlim(xl)
+    ax.set_ylim(yl)
 
+    for key, bbox in bboxes.items():
+        H = annotation_data[key]["H"]
+        H_mask = annotation_data[key]["H_mask"]
+        bbox_result = annotation_data[key]["bbox_result"]
+        ax.imshow(
+            H_mask * H,
+            extent=[
+                bbox.extent[0] + bbox.xedges[0],
+                bbox.extent[0] + bbox.xedges[-1],
+                bbox.extent[2] + bbox.yedges[-1],
+                bbox.extent[2] + bbox.yedges[0],
+            ],
+            alpha=0.4,
+            zorder=111,
+            # cmap="gray_r",
+        )
+
+        if not bbox.merge_results:
+            for jj, result in enumerate(bbox_result):
+                if bbox.axis == 0:
+                    diff = np.diff(bbox.yedges)
+                    ax.annotate(
+                        result,
+                        (
+                            bbox.extent[0] + bbox.xedges[-1] * 1.1,
+                            bbox.extent[2] + bbox.yedges[jj] + diff[jj] / 2,
+                        ),
+                        color="red",
+                    )
+                if bbox.axis == 1:
+                    pass
+
+    ax.set_title("Reference image")
+    ax.set_ylim(ax.get_ylim()[::-1])
+    ax.set_title(annotated_image_filename)
+
+    if image_destination:
+        plt.savefig(str(image_destination), bbox_inches="tight")
+
+    # plt.show()
+    plt.close()
+
+
+@click.command()
+@click.option("--pdf_path", "-p", type=str, default=None)
+@click.option("--recover", "-r", type=str, default=None)
+def main(pdf_path, recover):
+
+    # -------------------------------------------------------------------------------
+    # STARTUP TEXT:
+    # -------------------------------------------------------------------------------
     with open("logo.txt", "r") as f:
         for line in f:
             print(line.rstrip())
+
     # -------------------------------------------------------------------------------
     # SET PATHS FOR OUTPUT
     # -------------------------------------------------------------------------------
-
     session_name = input("Input a name for this session: ")
     full_session_name = (
-        f"output/{session_name}_{datetime.now().now().strftime('%Y_%m_%d__%H-%M-%S')}"
+        f"{session_name}_{datetime.now().now().strftime('%Y_%m_%d_%H%M')}"
     )
 
-    destination_folder = Path.cwd() / full_session_name
+    destination_folder = Path.cwd() / "output" / full_session_name
     destination_folder.mkdir(exist_ok=True, parents=True)
 
     image_folder = destination_folder / "images"
     excel_folder = destination_folder / "excel"
+    cache_folder = destination_folder / "cache"
     image_folder.mkdir(exist_ok=True, parents=True)
     excel_folder.mkdir(exist_ok=True, parents=True)
+    cache_folder.mkdir(exist_ok=True, parents=True)
 
     # -------------------------------------------------------------------------------
     # LOAD PDF AND PREPROCESS
     # -------------------------------------------------------------------------------
-    pages = load_pdfs(pdf_path)
+    if pdf_path:
+        pages = load_pdfs(pdf_path)
 
-    registered_images = register_images(pages)
+        registered_images = register_images(pages)
+
+        # -------------------------------------------------------------------------------
+        # SET BOUNDING BOXES
+        # -------------------------------------------------------------------------------
+        # select target bounding boxes off of the first image
+        print("\nBounding box set-up:")
+        bboxes = select_regions(registered_images[:, :, 0])
+        print("\nFinished bounding box set-up.\n")
+
+        # -------------------------------------------------------------------------------
+        # CACHE / PICKLE REGISTERED IMAGES AND BOUNDING BOXES
+        # -------------------------------------------------------------------------------
+        print_sep()
+        print(f"\nCacheing session data to {str(cache_folder)}")
+        print(
+            f"Use --recover [-r] output/{full_session_name} to restart session from cache-file.\n"
+        )
+
+        image_cache_path = cache_folder / "registered_images.npy"
+        np.save(str(image_cache_path), registered_images)
+
+        bbox_cache_path = cache_folder / "bounding_boxes.pkl"
+        with open(str(bbox_cache_path), "wb") as file:
+            pickle.dump(bboxes, file)
 
     # -------------------------------------------------------------------------------
-    # SET BOUNDING BOXES
+    # LOAD REGISTERED IMAGES AND BBOXES FROM CACHE:
     # -------------------------------------------------------------------------------
-    # select target bounding boxes off of the first image
-    print("\nBounding box set-up:")
-    bboxes = select_regions(registered_images[:, :, 0])
-    print("\nFinished bounding box set-up.")
+    if recover:
+        image_cache_path = Path.cwd() / recover / "cache" / "registered_images.npy"
+        bbox_cache_path = Path.cwd() / recover / "cache" / "bounding_boxes.pkl"
+
+        registered_images = np.load(str(image_cache_path), allow_pickle=True)
+
+        with open(str(bbox_cache_path), "rb") as file:
+            bboxes = pickle.load(file)
 
     # -------------------------------------------------------------------------------
     # SET UP OUTPUT VARIABLES
@@ -170,25 +270,24 @@ def main(pdf_path):
     # MAIN LOOP:
     # -------------------------------------------------------------------------------
     # loop through images and read bounding boxes:
-    print("\nProcessing bubblesheets.")
-    for page_no in tqdm(range(len(pages))):
+    n_pages = np.shape(registered_images)[2]
+    print_sep()
+    print("Processing bubblesheets.")
+    for page_no in range(n_pages):
+        print(f"{page_no+1} of {n_pages}.")
         annotated_image_filename = ""
         page_results = dict.fromkeys(all_field_labels)
         image = registered_images[:, :, page_no]
         xl = [0, image.shape[1]]
         yl = [0, image.shape[0]]
 
-        fig, ax = plt.subplots(figsize=(8.5, 11))
-        ax.imshow(image, origin="upper", cmap="gray_r")
-        ax.set_xlim(xl)
-        ax.set_ylim(yl)
+        annotation_data = dict()
 
-        for _, bbox in bboxes.items():
-            # print(bbox.field_labels)
+        for key, bbox in bboxes.items():
             image_in_bbox = crop(image, bbox.extent)
             H = bin_and_count_image(image_in_bbox, bbox)
-            bbox_result = parse_filled_bubbles(bbox, H)
-
+            # bbox_result = parse_filled_bubbles(bbox, H)
+            bbox_result = parse_filled_bubbles_with_corrections(image, bbox, H)
             # print(f"{key}: {bbox_result}")
 
             if bbox.merge_results:
@@ -198,39 +297,47 @@ def main(pdf_path):
                 for idx, field_label in enumerate(bbox.field_labels):
                     page_results[field_label] = bbox_result[idx]
 
-            ax.imshow(
-                H,
-                extent=[
-                    bbox.extent[0] + bbox.xedges[0],
-                    bbox.extent[0] + bbox.xedges[-1],
-                    bbox.extent[2] + bbox.yedges[-1],
-                    bbox.extent[2] + bbox.yedges[0],
-                ],
-                alpha=0.5,
-                zorder=11,
-            )
-        ax.set_ylim(ax.get_ylim()[::-1])
-        ax.set_title(annotated_image_filename)
-        # plt.show()
+            H_threshold = estimate_filled_threshold(H)
+            idx = np.where(H > H_threshold)
+            H_mask = np.ones(H.shape)
+            H_mask[idx[0], idx[1]] += 1
+
+            annotation_data[key] = {
+                "H": H,
+                "H_mask": H_mask,
+                "bbox_result": bbox_result,
+            }
 
         combined_results = combined_results.append(page_results, ignore_index=True)
 
         # -------------------------------------------------------------------------------
-        # SAVE ANNOTATED IMAGE OF BUBBLESHEET
+        # BUILD AN ANNOTATED IMAGE
         # -------------------------------------------------------------------------------
+
         image_destination = image_folder / annotated_image_filename
-        plt.savefig(str(image_destination), bbox_inches="tight")
-        plt.close()
+        plot_annotated_document(
+            bboxes,
+            annotated_image_filename,
+            image,
+            xl,
+            yl,
+            annotation_data,
+            image_destination,
+        )
+        # plt.close()
 
     # -------------------------------------------------------------------------------
     # SAVE RESULTS IN EXCEL FILE
     # -------------------------------------------------------------------------------
     spreadsheet_destination = excel_folder / "results.xlsx"
     combined_results.to_excel(str(spreadsheet_destination), index=False)
-
     print(f"\nResults saved to {str(destination_folder)}")
+
     print("\nExiting.")
+    # end of program
 
 
 if __name__ == "__main__":
     main()
+
+# %%

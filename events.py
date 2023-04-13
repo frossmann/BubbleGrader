@@ -1,5 +1,5 @@
 # events.py
-#%%
+
 import click
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,37 +8,6 @@ from pdf2image import convert_from_path
 import scipy.signal as signal
 import cv2 as cv
 import string
-
-
-def show(im):
-    """
-    Plotter function with params:
-     - figsize: 8.5x11''
-     - colorbar
-    """
-    _, ax = plt.subplots(figsize=(8.5, 11))
-    im = ax.imshow(im, cmap="gray_r")
-    plt.colorbar(mappable=im, ax=ax, shrink=0.5)
-    plt.show()
-    return ax
-
-
-def load_image():
-    pdf_path = "/Users/francis/Desktop/midterm2/individual_single.pdf"
-    pages = convert_from_path(pdf_path, dpi=300)
-    return pages
-
-
-def threshold(im):
-    im = np.array(im)
-    gray = cv.cvtColor(im, cv.COLOR_BGR2GRAY)
-    _, thresh = cv.threshold(gray, 100, 255, cv.THRESH_BINARY)
-    thresh = 255 - thresh
-    return thresh
-
-
-def print_sep():
-    print("\n" + "*" * 20)
 
 
 class BubbleBox:
@@ -55,7 +24,52 @@ class BubbleBox:
         self.is_alpha = self.set_format()
         self.merge_results = self.set_merge()
         self.field_labels = self.set_field_labels()
+        self.grid = self.build_bubble_grid()
+        # print(self.grid)
+        # print(self.grid.shape)
         # self.show_bins()
+
+    def set_axis(self):
+        AXIS_SET = False
+        while not AXIS_SET:
+            user_input = input("Read along rows or columns? [r/c]: ")
+            if user_input.lower() == "r":
+                return 0
+            elif user_input.lower() == "c":
+                return 1
+            else:
+                print("Invalid input. Valid inputs are [r/c].")
+
+    def set_format(self):
+        FORMAT_SET = False
+        while not FORMAT_SET:
+            user_input = input("Alphabetical or numeric data type? [a/n]: ")
+            if user_input.lower() == "a":
+                return 1
+            elif user_input.lower() == "n":
+                return 0
+            else:
+                print("Invalid input. Valid inputs are [a/n].")
+
+    def set_merge(self):
+        MERGE_SET = False
+        while not MERGE_SET:
+            user_input = input("Continuous or discrete data type? [c/d]: ")
+            if user_input.lower() == "c":
+                return 1
+            elif user_input.lower() == "d":
+                return 0
+            else:
+                print("Invalid input. Valid inputs are [c/d].")
+
+    def set_field_labels(self):
+        if self.merge_results:
+            return (self.label,)
+        else:
+            if self.axis == 0:
+                return [self.label + f"{ii + 1}" for ii in range(self.ny)]
+            if self.axis == 1:
+                return [self.label + f"{ii + 1}" for ii in range(self.nx)]
 
     def show(self, img, label=None):
         fig, ax = plt.subplots(figsize=(10, 10))
@@ -178,157 +192,47 @@ class BubbleBox:
         ax.set_title(f"{self.label}\nAutomatically extracted bins ")
         plt.show()
 
-    def set_axis(self):
-        AXIS_SET = False
-        while not AXIS_SET:
-            user_input = input("Read along rows or columns? [r/c]: ")
-            if user_input.lower() == "r":
-                return 0
-            elif user_input.lower() == "c":
-                return 1
-            else:
-                print("Invalid input. Valid inputs are [r/c].")
+    def build_bubble_grid(self):
+        grid = np.zeros((self.ny, self.nx), dtype=object)
 
-    def set_format(self):
-        FORMAT_SET = False
-        while not FORMAT_SET:
-            user_input = input("Alphabetical or numeric data type? [a/n]: ")
-            if user_input.lower() == "a":
-                return 1
-            elif user_input.lower() == "n":
-                return 0
-            else:
-                print("Invalid input. Valid inputs are [a/n].")
+        if self.axis == 0:
+            row = np.arange(self.nx)
+            if self.is_alpha:
+                to_alpha = get_alpha(self.nx)
+                row = [to_alpha[val] for val in row]
+            for ii in range(self.ny):
+                grid[ii, :] = row
 
-    def set_merge(self):
-        MERGE_SET = False
-        while not MERGE_SET:
-            user_input = input("Continuous or discrete data type? [c/d]: ")
-            if user_input.lower() == "c":
-                return 1
-            elif user_input.lower() == "d":
-                return 0
-            else:
-                print("Invalid input. Valid inputs are [c/d].")
+        if self.axis == 1:
+            col = np.arange(self.ny)
+            if self.is_alpha:
+                to_alpha = get_alpha(self.ny)
+                col = [to_alpha[val] for val in col]
+            for ii in range(self.nx):
+                grid[:, ii] = col
 
-    def set_field_labels(self):
-        if self.merge_results:
-            return (self.label,)
-        else:
-            if self.axis == 0:
-                return [self.label + f"{ii + 1}" for ii in range(self.ny)]
-            if self.axis == 1:
-                return [self.label + f"{ii + 1}" for ii in range(self.nx)]
+        return grid
 
 
-def get_alpha(num_options):
-    alphabet = list(string.ascii_lowercase)
-    alpha = dict(zip(np.arange(num_options), alphabet[:num_options]))
-    return alpha
+def show(im):
+    """
+    Plotter function with params:
+     - figsize: 8.5x11''
+     - colorbar
+    """
+    _, ax = plt.subplots(figsize=(8.5, 11))
+    im = ax.imshow(im, cmap="gray_r")
+    plt.colorbar(mappable=im, ax=ax, shrink=0.5)
+    plt.show()
+    return ax
 
 
-def bin_and_count_bbox(bbox):
-    H = np.zeros((bbox.ny, bbox.nx))
-
-    xe, ye = bbox.xedges, bbox.yedges
-    for ix in range(len(xe) - 1):
-        for iy in range(len(ye) - 1):
-            i1 = xe[ix]
-            i2 = xe[ix + 1] + 1
-            i3 = ye[iy]
-            i4 = ye[iy + 1] + 1
-            H[iy, ix] = np.sum(bbox.crop[i3:i4, i1:i2])
-
-    return H
-
-
-def bin_and_count_image(image, bbox):
-    H = np.zeros((bbox.ny, bbox.nx))
-
-    xe, ye = bbox.xedges, bbox.yedges
-    for ix in range(len(xe) - 1):
-        for iy in range(len(ye) - 1):
-            i1 = xe[ix]
-            i2 = xe[ix + 1] + 1
-            i3 = ye[iy]
-            i4 = ye[iy + 1] + 1
-            H[iy, ix] = np.sum(image[i3:i4, i1:i2])
-    return H
-
-
-def parse_filled_bubbles(bbox, H):
-    background_value = np.median(H.ravel())
-
-    results = []
-    # count over rows
-    if bbox.axis == 0:
-        for ii in range(bbox.ny):
-            row = H[ii, :]
-            filled = [
-                idx for idx, val in enumerate(row) if val > 1.5 * np.percentile(row, 66)
-            ]
-            if len(filled) > 0:
-                results.append(filled)
-            else:
-                results.append(
-                    [
-                        None,
-                    ]
-                )
-
-    # count over columns
-    if bbox.axis == 1:
-        for ii in range(bbox.nx):
-            col = H[:, ii]
-            filled = [
-                idx for idx, val in enumerate(col) if val > 1.5 * np.percentile(col, 66)
-            ]
-            if len(filled) > 0:
-                results.append(filled)
-            else:
-                results.append(
-                    [
-                        None,
-                    ]
-                )
-
-    # convert numeric to alpha
-    if bbox.is_alpha:
-        to_alpha = get_alpha(26)
-        alpha_results = []
-
-        for sublist in results:
-            sub = [to_alpha[val] if val is not None else val for val in sublist]
-            alpha_results.append(sub)
-
-        results = alpha_results
-
-    if bbox.merge_results:
-        merged_results = ""
-        for item in results:
-            if len(item) == 1:
-                if item[0] is not None:
-                    merged_results += f"{item[0]}"
-            elif len(item) > 1:
-                compound_results = "("
-                for val in item:
-                    compound_results += f"{val},"
-                compound_results += ")"
-                merged_results += compound_results
-        cleaned_results = merged_results
-    else:
-        cleaned_results = []
-        for item in results:
-            if len(item) == 1:
-                cleaned_results.append(f"{item[0]}")
-            if len(item) > 1:
-                compound_item = "("
-                for val in item:
-                    compound_item += f"{val},"
-                compound_item += ")"
-                cleaned_results.append(compound_item)
-
-    return cleaned_results
+def threshold(im):
+    im = np.array(im)
+    gray = cv.cvtColor(im, cv.COLOR_BGR2GRAY)
+    _, thresh = cv.threshold(gray, 100, 255, cv.THRESH_BINARY)
+    thresh = 255 - thresh
+    return thresh
 
 
 def select_regions(image):
@@ -353,40 +257,223 @@ def select_regions(image):
     return regions
 
 
-def plot_annotated(image, regions):
-    # PLOT THE ANNOTATED DOCUMENT
-    fig, ax = plt.subplots(figsize=(10, 10))
-    xl = [0, bbox.im.shape[1]]
-    yl = [0, bbox.im.shape[0]]
-    ax.imshow(bbox.im, extent=[*xl, *yl], cmap="gray_r")
+def bin_and_count_image(image, bbox):
+    H = np.zeros((bbox.ny, bbox.nx))
+
+    xe, ye = bbox.xedges, bbox.yedges
+    for ix in range(len(xe) - 1):
+        for iy in range(len(ye) - 1):
+            i1 = xe[ix]
+            i2 = xe[ix + 1] + 1
+            i3 = ye[iy]
+            i4 = ye[iy + 1] + 1
+            H[iy, ix] = np.sum(image[i3:i4, i1:i2])
+    return H
+
+
+def estimate_filled_threshold(H):
+    background_prctile = np.percentile(H.ravel(), 90)
+    background_value = np.median(H.ravel()[H.ravel() < background_prctile])
+    filled_threshold = 1.5 * background_value
+    return filled_threshold
+
+
+def parse_filled_bubbles(bbox, H):
+
+    filled_threshold = estimate_filled_threshold(H)
+    results = []
+    # count over rows
+    if bbox.axis == 0:
+        for ii in range(bbox.ny):
+            row = H[ii, :]
+            filled = [idx for idx, val in enumerate(row) if val > filled_threshold]
+            if len(filled) > 0:
+                # correction = input()
+                results.append(filled)
+            else:
+                results.append(
+                    [
+                        None,
+                    ]
+                )
+
+    # count over columns
+    if bbox.axis == 1:
+        for ii in range(bbox.nx):
+            col = H[:, ii]
+            filled = [idx for idx, val in enumerate(col) if val > filled_threshold]
+            if len(filled) > 0:
+                results.append(filled)
+            else:
+                results.append(
+                    [
+                        None,
+                    ]
+                )
+
+    # convert numeric to alpha
+    if bbox.is_alpha:
+        to_alpha = get_alpha(26)
+        alpha_results = []
+
+        for sublist in results:
+            sub = [to_alpha[val] if val is not None else val for val in sublist]
+            alpha_results.append(sub)
+
+        results = alpha_results
+
+    # squash whitespace if need be (e.g. names, IDs)
+    if bbox.merge_results:
+        merged_results = ""
+        for item in results:
+            if len(item) == 1:
+                if item[0] is not None:
+                    merged_results += f"{item[0]}"
+                else:
+                    merged_results += "_"
+            elif len(item) > 1:
+                compound_results = "("
+                for val in item:
+                    compound_results += f"{val},"
+                compound_results += ")"
+                merged_results += compound_results
+        cleaned_results = merged_results
+    else:
+        cleaned_results = []
+        for item in results:
+            if len(item) == 1:
+                cleaned_results.append(f"{item[0]}")
+            if len(item) > 1:
+                compound_item = "("
+                for val in item:
+                    compound_item += f"{val},"
+                compound_item += ")"
+                cleaned_results.append(compound_item)
+
+    return cleaned_results
+
+
+def plot_annotated_bbox(image, bbox, H, target_bins=None):
+
+    H_threshold = estimate_filled_threshold(H)
+    idx = np.where(H > H_threshold)
+    H_mask = np.ones(H.shape)
+    H_mask[idx[0], idx[1]] += 1
+
+    if target_bins:
+        # [[tx],[ty]]
+        tx, ty = target_bins
+        for ii, txi in enumerate(tx):
+            H_mask[txi, ty[ii]] *= 50
+
+    xl = [0, image.shape[1]]
+    yl = [0, image.shape[0]]
+
+    fig, ax = plt.subplots(figsize=(8.5, 11))
+    ax.imshow(image, origin="upper", cmap="gray_r")
     ax.set_xlim(xl)
     ax.set_ylim(yl)
 
-    # with gridlines
-
-    for key, bbox in regions.items():
-
-        H = bin_and_count_bbox(bbox)
-        result = parse_filled_bubbles(bbox, H)
-
-        im = ax.imshow(
-            H,
-            extent=[
-                bbox.extent[0] + bbox.xedges[0] - 1,
-                bbox.extent[0] + bbox.xedges[-1] - 1,
-                yl[1] - bbox.extent[3] + bbox.yedges[0] + 1,
-                yl[1] - bbox.extent[3] + bbox.yedges[-1] + 1,
-            ],
-            alpha=0.5,
-            zorder=11,
-        )
-
-    plt.show()
+    ax.imshow(
+        H_mask * H,
+        extent=[
+            bbox.extent[0] + bbox.xedges[0],
+            bbox.extent[0] + bbox.xedges[-1],
+            bbox.extent[2] + bbox.yedges[-1],
+            bbox.extent[2] + bbox.yedges[0],
+        ],
+        alpha=0.4,
+        zorder=111,
+        # cmap="gray_r",
+    )
+    ax.set_ylim(ax.get_ylim()[::-1])
+    ax.set_title("Validation step")
+    plt.show(block=False)
 
 
-if __name__ == "__main__":
-    im = threshold(load_image()[0])
-    regions = select_regions()
+def parse_filled_bubbles_with_corrections(image, bbox, H):
+    filled_threshold = estimate_filled_threshold(H)
+    filled_idx = np.where(H > filled_threshold)
+    H_mask = np.zeros(H.shape)
+    H_mask[filled_idx[0], filled_idx[1]] += 1
+
+    results = []
+    # count over rows
+    if bbox.axis == 0:
+        for ii in range(bbox.ny):
+            row = H_mask[ii, :]
+            filled = np.where(row > 0)[0]
+            if filled.size > 0:
+                row_result = bbox.grid[ii, filled]
+                if filled.size > 1:
+                    plot_annotated_bbox(image, bbox, H, [[ii] * len(filled), filled])
+                    row_result = input(f"    Input corrections for row {ii + 1}: ")
+                    plt.close()
+
+                results.append(row_result)
+            else:
+                results.append(
+                    [
+                        None,
+                    ]
+                )
+
+    # count over columns
+    if bbox.axis == 1:
+        for ii in range(bbox.nx):
+            col = H_mask[:, ii]
+            filled = np.where(col > 0)[0]
+            if filled.size > 0:
+                col_result = bbox.grid[filled, ii]
+                if filled.size > 1:
+                    plot_annotated_bbox(image, bbox, H, [filled, [ii] * len(filled)])
+                    col_result = input(f"    Input corrections for column {ii + 1}: ")
+                    plt.close()
+
+                results.append(col_result)
+            else:
+                results.append(
+                    [
+                        None,
+                    ]
+                )
+
+    # squash whitespace if need be (e.g. names, IDs)
+    if bbox.merge_results:
+        merged_results = ""
+        for item in results:
+            if len(item) == 1:
+                if item[0] is not None:
+                    merged_results += f"{item[0]}"
+                else:
+                    merged_results += "_"
+            elif len(item) > 1:
+                compound_results = "("
+                for val in item:
+                    compound_results += f"{val},"
+                compound_results += ")"
+                merged_results += compound_results
+        cleaned_results = merged_results
+    else:
+        cleaned_results = []
+        for item in results:
+            if len(item) == 1:
+                cleaned_results.append(f"{item[0]}")
+            if len(item) > 1:
+                compound_item = "("
+                for val in item:
+                    compound_item += f"{val},"
+                compound_item += ")"
+                cleaned_results.append(compound_item)
+
+    return cleaned_results
 
 
-# %%
+def print_sep():
+    print("-" * 42)
+
+
+def get_alpha(num_options):
+    alphabet = list(string.ascii_lowercase)
+    alpha = dict(zip(np.arange(num_options), alphabet[:num_options]))
+    return alpha
